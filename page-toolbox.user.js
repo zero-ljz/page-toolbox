@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         全局工具箱
 // @namespace    http://iapp.run
-// @version      2.2.1
+// @version      2.3.0
 // @description  全能网页工具箱：解除复制限制 + 全页翻译 + 聚合搜索；浏览器必备效率神器！一键解决网页痛点：支持解除右键/复制限制、沉浸式翻译、二维码生成与夜间模式。内置强大的自定义搜索面板（支持 JSON 配置与自动抓取 Favicon），现代化暗色 UI，轻量拖拽，即装即用。
 // @author       zero-ljz
 // @homepage     https://github.com/zero-ljz/scripts/blob/main/greasemonkey/tools.js
@@ -14,6 +14,10 @@
 // @grant        GM_addStyle
 // @grant        GM_setClipboard
 // @grant        GM_openInTab
+// @connect      dict.youdao.com
+// @connect      translate.google.com
+// @connect      translate.googleapis.com
+// @connect      wxapp.translator.qq.com
 // @require      https://openuserjs.org/src/libs/sizzle/GM_config.js
 // @require      https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.4.4/qrcode.min.js
 // @license      MIT
@@ -155,6 +159,119 @@
         }
     };
 
+    const YOUDAO_API_URL = "https://dict.youdao.com/jsonapi?q=";
+    const YOUDAO_TIMEOUT_MS = 6000;
+
+    class YoudaoRequestError extends Error {
+        constructor(message, { code, status = 0, cause } = {}) {
+            super(message);
+            this.name = "YoudaoRequestError";
+            this.code = code;
+            this.status = status;
+            if (cause !== undefined) this.cause = cause;
+        }
+    }
+
+    const parseYoudaoTranslation = (data) => {
+        if (!data || typeof data !== "object") return "";
+
+        const lines = [];
+        const ecWords = data.ec?.word;
+        const ceWords = data.ce?.word;
+
+        if (Array.isArray(ecWords) && ecWords.length > 0) {
+            const entries = ecWords[0]?.trs;
+            if (Array.isArray(entries)) {
+                entries.forEach(entry => {
+                    const text = entry?.tr?.[0]?.l?.i;
+                    if (Array.isArray(text) && text.length > 0) lines.push(String(text[0]));
+                });
+            }
+        } else if (Array.isArray(ceWords) && ceWords.length > 0) {
+            const entries = ceWords[0]?.trs;
+            if (Array.isArray(entries)) {
+                entries.forEach(entry => {
+                    const data = entry?.tr?.[0]?.l?.i;
+                    let text = "";
+
+                    if (typeof data === "string") {
+                        text = data;
+                    } else if (Array.isArray(data)) {
+                        data.forEach(item => {
+                            if (typeof item === "string") text += item;
+                            else if (item && typeof item === "object" && "#text" in item) text += item["#text"];
+                        });
+                    }
+
+                    text = text.replace(/^[ \t\r\n;]+|[ \t\r\n;]+$/g, "");
+                    if (text) lines.push(text);
+                });
+            }
+        }
+
+        return lines.join("\n");
+    };
+
+    const requestYoudaoTranslation = (query) => new Promise((resolve, reject) => {
+        const normalizedQuery = String(query ?? "").trim();
+        if (!normalizedQuery) {
+            reject(new YoudaoRequestError("查询内容不能为空", { code: "INVALID_QUERY" }));
+            return;
+        }
+
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: YOUDAO_API_URL + encodeURIComponent(normalizedQuery),
+            headers: { Accept: "application/json, text/plain, */*" },
+            anonymous: true,
+            timeout: YOUDAO_TIMEOUT_MS,
+            onload(response) {
+                if (response.status < 200 || response.status >= 300) {
+                    reject(new YoudaoRequestError(`有道词典返回 HTTP ${response.status}`, {
+                        code: "HTTP_ERROR",
+                        status: response.status
+                    }));
+                    return;
+                }
+
+                let data;
+                try {
+                    data = JSON.parse(response.responseText);
+                } catch (cause) {
+                    reject(new YoudaoRequestError("有道词典返回了无效数据", {
+                        code: "INVALID_JSON",
+                        status: response.status,
+                        cause
+                    }));
+                    return;
+                }
+
+                const translation = parseYoudaoTranslation(data);
+                if (!translation) {
+                    reject(new YoudaoRequestError("未找到可用释义", {
+                        code: "NO_TRANSLATION",
+                        status: response.status
+                    }));
+                    return;
+                }
+
+                resolve(translation);
+            },
+            onerror(response) {
+                reject(new YoudaoRequestError("有道词典请求失败", {
+                    code: "NETWORK_ERROR",
+                    status: response?.status ?? 0
+                }));
+            },
+            ontimeout() {
+                reject(new YoudaoRequestError("有道词典请求超时", { code: "TIMEOUT" }));
+            },
+            onabort() {
+                reject(new YoudaoRequestError("有道词典请求已取消", { code: "ABORTED" }));
+            }
+        });
+    });
+
 
     // --- 辅助：构建搜索功能的函数 (自动图标版) ---
     const buildSearchTools = () => {
@@ -292,6 +409,25 @@
                             } catch (e) { Utils.toast("翻译解析失败"); }
                         }
                     });
+                }
+            },
+            {
+                name: "有道词典", icon: "📖",
+                action: async () => {
+                    const query = Utils.getSelection() || Utils.prompt("请输入要查询的单词或文本：");
+                    if (!query) return;
+
+                    Utils.toast("⏳ 正在查询有道词典...");
+                    try {
+                        const translation = await requestYoudaoTranslation(query);
+                        const result = document.createElement('div');
+                        result.style.cssText = "white-space:pre-wrap; word-break:break-word; line-height:1.7;";
+                        result.textContent = translation;
+                        Utils.modal("📖 有道词典", result);
+                    } catch (error) {
+                        console.error("有道词典查询失败", error);
+                        Utils.toast(`❌ ${error instanceof YoudaoRequestError ? error.message : "有道词典查询失败"}`);
+                    }
                 }
             },
             {
