@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         全局工具箱
 // @namespace    http://iapp.run
-// @version      2.3.0
+// @version      2.3.1
 // @description  全能网页工具箱：解除复制限制 + 全页翻译 + 聚合搜索；浏览器必备效率神器！一键解决网页痛点：支持解除右键/复制限制、沉浸式翻译、二维码生成与夜间模式。内置强大的自定义搜索面板（支持 JSON 配置与自动抓取 Favicon），现代化暗色 UI，轻量拖拽，即装即用。
 // @author       zero-ljz
 // @homepage     https://github.com/zero-ljz/scripts/blob/main/greasemonkey/tools.js
@@ -398,16 +398,24 @@
                 action: () => {
                     let q = Utils.getSelection() || Utils.prompt("请输入翻译文本：");
                     if (!q) return;
+                    Utils.toast("⏳ 正在请求 Google 翻译...");
                     GM_xmlhttpRequest({
                         method: "GET",
                         url: "http://translate.google.com/translate_a/single?client=gtx&dt=t&dj=1&ie=UTF-8&sl=auto&tl=zh&q=" + encodeURIComponent(q),
+                        timeout: 10000,
                         onload: function (response) {
+                            if (response.status < 200 || response.status >= 300) {
+                                Utils.toast(`❌ Google 翻译返回 HTTP ${response.status}`);
+                                return;
+                            }
                             try {
                                 const obj = JSON.parse(response.responseText);
                                 let res = obj.sentences.map(s => s.trans).join("");
                                 Utils.modal("翻译结果", res);
-                            } catch (e) { Utils.toast("翻译解析失败"); }
-                        }
+                            } catch (e) { Utils.toast("❌ Google 翻译解析失败"); }
+                        },
+                        onerror: () => Utils.toast("❌ Google 翻译请求失败"),
+                        ontimeout: () => Utils.toast("❌ Google 翻译请求超时")
                     });
                 }
             },
@@ -439,9 +447,11 @@
                     // 构造 URL 参数
                     const params = "source=auto&target=zh&platform=WeChat_APP&candidateLangs=en|zh&guid=cli_user&sourceText=" + encodeURIComponent(q);
 
+                    Utils.toast("⏳ 正在请求微信翻译...");
                     GM_xmlhttpRequest({
                         method: "GET",
                         url: "https://wxapp.translator.qq.com/api/translate?" + params,
+                        timeout: 10000,
                         headers: {
                             "Content-Type": "application/json",
                             // 伪造 Referer 和 UA 是必须的
@@ -449,16 +459,21 @@
                             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.32(0x18002035) NetType/WIFI Language/zh_TW"
                         },
                         onload: function (response) {
+                            if (response.status < 200 || response.status >= 300) {
+                                Utils.toast(`❌ 微信翻译返回 HTTP ${response.status}`);
+                                return;
+                            }
                             try {
                                 const obj = JSON.parse(response.responseText);
                                 if (obj && obj.targetText) {
                                     Utils.modal("微信翻译结果", obj.targetText);
                                 } else {
-                                    Utils.toast("微信接口返回异常");
+                                    Utils.toast("❌ 微信翻译接口返回异常");
                                 }
-                            } catch (e) { Utils.toast("翻译解析失败"); }
+                            } catch (e) { Utils.toast("❌ 微信翻译解析失败"); }
                         },
-                        onerror: (e) => Utils.toast("网络请求失败")
+                        onerror: () => Utils.toast("❌ 微信翻译请求失败"),
+                        ontimeout: () => Utils.toast("❌ 微信翻译请求超时")
                     });
                 }
             },
@@ -658,11 +673,27 @@
             {
                 name: "网页标注(Spacing)", icon: "📏",
                 action: () => {
-                    // 使用动态导入，不阻塞主线程
+                    const existingScript = document.getElementById('gm-spacing-script');
+                    if (existingScript) {
+                        Utils.toast(existingScript.dataset.loaded === 'true'
+                            ? "📏 Spacing.js 已加载，按住 Alt 键查看元素间距"
+                            : "⏳ 正在加载 Spacing.js...");
+                        return;
+                    }
+
+                    Utils.toast("⏳ 正在加载 Spacing.js...");
                     const script = document.createElement('script');
+                    script.id = 'gm-spacing-script';
                     script.src = "https://unpkg.com/spacingjs";
+                    script.onload = () => {
+                        script.dataset.loaded = 'true';
+                        Utils.toast("📏 Spacing.js 加载完成，按住 Alt 键查看元素间距");
+                    };
+                    script.onerror = () => {
+                        script.remove();
+                        Utils.toast("❌ Spacing.js 加载失败");
+                    };
                     document.body.appendChild(script);
-                    Utils.toast("📏 按住 Alt 键查看元素间距");
                 }
             },
             {
