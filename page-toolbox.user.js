@@ -337,7 +337,38 @@
                 name: "朗读文本", icon: "🗣️",
                 action: () => {
                     let q = Utils.getSelection() || Utils.prompt("请输入朗读文本：");
-                    if (q) window.speechSynthesis.speak(new window.SpeechSynthesisUtterance(q));
+                    if (!q) return;
+
+                    const synth = window.speechSynthesis;
+                    const speak = () => {
+                        const utterance = new window.SpeechSynthesisUtterance(q);
+                        const voices = synth.getVoices();
+                        const chineseVoices = voices.filter(voice => /^zh[-_]CN$/i.test(voice.lang));
+
+                        utterance.voice = chineseVoices.find(voice => /xiaoyi|晓伊/i.test(voice.name))
+                            || chineseVoices[0]
+                            || null;
+                        utterance.lang = "zh-CN";
+
+                        synth.cancel();
+                        synth.speak(utterance);
+                    };
+
+                    if (synth.getVoices().length > 0) {
+                        speak();
+                        return;
+                    }
+
+                    let hasSpoken = false;
+                    const speakOnce = () => {
+                        if (hasSpoken) return;
+                        hasSpoken = true;
+                        synth.removeEventListener("voiceschanged", speakOnce);
+                        speak();
+                    };
+
+                    synth.addEventListener("voiceschanged", speakOnce);
+                    setTimeout(speakOnce, 500);
                 }
             },
             {
